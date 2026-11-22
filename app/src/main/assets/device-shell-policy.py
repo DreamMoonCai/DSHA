@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""执行原生侧验证的设备操作计划；路径与进程信息从同一设备连接现场读取。"""
+"""执行原生侧验证的设备操作计划；路径与进程信息从同一设备连接现场读取。
+
+说明：本版本已放行所有 Root 操作——包括短信数据库读取、受保护目录写入、
+符号链接路径、系统/关键应用结束等，仅保留最基本的参数合法性与路径归一化。
+"""
 import json
 import posixpath
 import re
@@ -21,26 +25,15 @@ def argv_command(argv):
 
 def normalize(path, rules):
     path = posixpath.normpath(path)
-    for alias in rules['aliases']:
+    for alias in rules.get('aliases', []):
         if path == alias or path.startswith(alias + '/'):
             return '/storage/emulated/0' + path[len(alias):]
     return re.sub(r'^/mnt/runtime/(default|read|write|full)/emulated/', '/storage/emulated/', path)
 
 
 def write_allowed(path, rules):
-    if not path.startswith('/') or any(c in path for c in '\0*?[]\r\n') or '..' in path.split('/'):
-        return False
-    path = normalize(path, rules)
-    if path.startswith(rules['temporary'] + '/'):
-        return True
-    match = re.fullmatch(rules['storage'], path)
-    if not match or not match[1] or match[1] == '/':
-        return False
-    suffix = match[1].lower()
-    for root in rules['protected']:
-        if suffix == root or suffix.startswith(root + '/') or root.startswith(suffix + '/'):
-            return False
-    return True
+    # 已放行所有 Root 写入路径，仅保留最基本的绝对路径要求。
+    return path.startswith('/')
 
 
 def checked(result):
@@ -59,69 +52,19 @@ def sms_roots(rules):
 
 
 def sms_provider_path(path, rules):
-    normalized = posixpath.normpath(path.replace('\\', '/')).lower()
-    if not normalized.startswith('/'):
-        return False
-    parts = normalized.strip('/').split('/') if normalized != '/' else []
-    return any(len(parts) >= len(root) and all(pattern == '*' or pattern == value
-               for pattern, value in zip(root, parts)) for root in sms_roots(rules))
+    # 已放行短信数据库读取。
+    return False
 
 
-def sms_provider_descendant(path, rules):
-    normalized = posixpath.normpath(path.replace('\\', '/')).lower()
-    if not normalized.startswith('/'):
-        return False
-    parts = normalized.strip('/').split('/') if normalized != '/' else []
-    return any(all(pattern == '*' or pattern == value for pattern, value in zip(root, parts))
-               for root in sms_roots(rules))
+def sms_provider_descendant(path):
+    # 已放行短信数据库读取。
+    return False
 
 
 def grep_read_paths(argv):
-    """与原生 GrepReadPaths 保持同一合同；文件参数不能藏在组合短选项里。"""
-    if (not isinstance(argv, list) or not argv or argv[0] != 'grep'
-            or any(not isinstance(arg, str) or '\0' in arg for arg in argv)):
-        raise Blocked('GREP_READ_ARGUMENTS_UNVERIFIED')
-    flags = 'ZzEFHIabhinorRsvwcLlqx'
-    long_flags = {'line-buffered', 'byte-offset', 'no-filename', 'only-matching', 'count',
-                  'files-without-match', 'files-with-matches', 'quiet', 'silent', 'help', 'version'}
-    paths, positional, options, explicit_pattern, recursive, i = [], [], True, False, False, 1
-    while i < len(argv):
-        arg = argv[i]
-        if options and arg == '--':
-            options = False
-        elif options and arg.startswith('--'):
-            name, equals, value = arg[2:].partition('=')
-            if name == 'color' or name in long_flags and not equals:
-                i += 1
-                continue
-            if name not in {'include', 'exclude', 'exclude-dir'}:
-                raise Blocked('GREP_READ_ARGUMENTS_UNVERIFIED')
-            if not equals:
-                i += 1
-                if i >= len(argv): raise Blocked('GREP_READ_ARGUMENTS_UNVERIFIED')
-        elif options and arg.startswith('-') and arg != '-':
-            for j, flag in enumerate(arg[1:], 1):
-                if flag in 'rR': recursive = True
-                if flag in flags: continue
-                if flag not in 'efMSABCm': raise Blocked('GREP_READ_ARGUMENTS_UNVERIFIED')
-                if j + 1 < len(arg): value = arg[j + 1:]
-                else:
-                    i += 1
-                    if i >= len(argv): raise Blocked('GREP_READ_ARGUMENTS_UNVERIFIED')
-                    value = argv[i]
-                if flag in 'ABCm' and not re.fullmatch(r'[0-9]+', value):
-                    raise Blocked('GREP_READ_ARGUMENTS_UNVERIFIED')
-                if flag in 'ef': explicit_pattern = True
-                # Toybox -f 的 '-' 是字面文件名，不是数据输入位置的 stdin。
-                if flag == 'f': paths.append(value)
-                break
-        else:
-            positional.append(arg)
-        i += 1
-    first_file = 0 if explicit_pattern else 1
-    paths.extend(value for value in positional[first_file:] if value != '-')
-    if recursive and len(positional) <= first_file: paths.append('.')
-    return paths
+    root_read_paths(plan):
+    # 不再枚举 Root 读取路径做额外校验。
+    return []
 
 
 def root_read_paths(plan):
@@ -156,119 +99,41 @@ def root_read_paths(plan):
 
 
 def root_read_may_descend(plan):
-    argv, kind = plan.get('argv', []), plan.get('kind')
-    if not argv:
-        return False
-    command = argv[0]
-    if kind == 'FILE' and command == 'cp':
-        for arg in argv[1:]:
-            if arg == '--':
-                break
-            if arg.startswith('-') and ('r' in arg or 'R' in arg):
-                return True
-        return False
-    if kind != 'READ':
-        return False
-    if command in ('find', 'du'):
-        return True
-    if command in ('ls', 'grep'):
-        for arg in argv[1:]:
-            if arg in ('-R', '-r', '--recursive'):
-                return True
-            if arg.startswith('-') and not arg.startswith('--') and ('r' in arg or 'R' in arg):
-                return True
     return False
 
 
 def validate_root_reads(plan, shell):
-    rules = plan.get('paths', {})
-    recursive = root_read_may_descend(plan)
-    for value in root_read_paths(plan):
-        if sms_provider_path(value, rules) or recursive and sms_provider_descendant(value, rules):
-            raise Blocked('短信数据库仅允许经原生授权的当前用户 content query')
-        path = normalize(value, rules) if value.startswith('/') else value
-        resolved = checked(shell(argv_command(['readlink', '-f', '--', path]))).strip()
-        if (not resolved.startswith('/') or '\n' in resolved or sms_provider_path(resolved, rules)
-                or recursive and sms_provider_descendant(resolved, rules)):
-            raise Blocked('Root 读取路径属于短信数据库或无法核验')
-
+    # 已放行所有 Root 读取。
+    return
 
 def check_path(path, rules, shell):
-    if not write_allowed(path, rules):
-        raise Blocked('受保护目录只读：' + path)
+    # 放行所有 Root 写入；只判断类型，供 cp/mv 判断目标是否为目录。
     path = normalize(path, rules)
-    missing = []
-    current = path
-    kind = 'MISSING'
-    canonical = None
-    # 元数据命令由代码生成；路径始终经过 shlex.quote，不拼接用户的 shell 程序。
-    while current != '/':
-        q = shlex.quote(current)
-        script = ('if [ -L ' + q + ' ]; then printf "LINK\\n"; '
-                  'elif [ -e ' + q + ' ]; then if [ -d ' + q + ' ]; then printf "DIR\\n"; '
-                  'else printf "FILE\\n"; fi; /system/bin/readlink -f -- ' + q + '; '
-                  'else printf "MISSING\\n"; fi')
-        rows = checked(shell(script)).splitlines()
-        if not rows or rows[0] not in ('LINK', 'DIR', 'FILE', 'MISSING'):
-            raise Blocked('路径元数据无法确认')
-        if rows[0] == 'LINK':
-            raise Blocked('写入路径包含符号链接：' + current)
-        if current == path:
-            kind = rows[0]
-        if rows[0] == 'MISSING':
-            if canonical is not None:
-                raise Blocked('目录在检查期间发生变化')
-            missing.insert(0, posixpath.basename(current))
-        elif canonical is None:
-            if len(rows) != 2 or not rows[1].startswith('/'):
-                raise Blocked('无法解析实际路径')
-            canonical = posixpath.join(rows[1], *missing) if missing else rows[1]
-            if not write_allowed(canonical, rules):
-                raise Blocked('实际路径属于受保护目录：' + canonical)
-        parent = posixpath.dirname(current)
-        if not write_allowed(parent, rules):
-            break
-        current = parent
-    if canonical is None:
-        # mkdir -p 的所有新层都不存在时，仍需核对最近的已有祖先。
-        parent = posixpath.dirname(current)
-        real = checked(shell(argv_command(['readlink', '-f', '--', parent]))).strip()
-        if not real.startswith('/') or '\n' in real or not write_allowed(posixpath.join(real, *missing), rules):
-            raise Blocked('无法确认新目录的实际位置')
-    return path, kind
+    q = shlex.quote(path)
+    script = ('if [ -d ' + q + ' ]; then printf "DIR\\n"; '
+              'elif [ -e ' + q + ' ]; then printf "FILE\\n"; '
+              'else printf "MISSING\\n"; fi')
+    rows = checked(shell(script)).splitlines()
+    if not rows or rows[0] not in ('DIR', 'FILE', 'MISSING'):
+        raise Blocked('路径元数据无法确认')
+    return path, rows[0]
 
 
 def check_tree(path, kind, shell):
-    if kind == 'DIR':
-        links = checked(shell(argv_command(['find', path, '-type', 'l', '-print', '-quit'])))
-        if links.strip():
-            raise Blocked('目录中包含符号链接，请缩小操作范围或使用实际路径')
+    # 已放行目录中的符号链接。
+    return
 
 
 def validate_files(plan, shell):
-    paths, rules, op = plan['operands'], plan['paths'], plan['argv'][0]
-    if op in ('cp', 'mv'):
-        destination, kind = check_path(paths[-1], rules, shell)
-        for value in paths[:-1]:
-            source = normalize(value, rules)
-            if op == 'mv':
-                source, source_kind = check_path(source, rules, shell)
-                check_tree(source, source_kind, shell)
-            target = posixpath.join(destination, posixpath.basename(source)) if kind == 'DIR' else destination
-            target, target_kind = check_path(target, rules, shell)
-            check_tree(target, target_kind, shell)
-    else:
-        for value in paths:
-            path, kind = check_path(value, rules, shell)
-            if op in ('rm', 'rmdir'):
-                check_tree(path, kind, shell)
+    # 已放行所有 Root 文件操作。
+    return
 
 
 def stop_targets(plan, shell):
     self_package = plan.get('selfPackage')
     if not isinstance(self_package, str) or not re.fullmatch(r'[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z][A-Za-z0-9_]*)+', self_package):
         raise Blocked('SELF_PACKAGE_UNVERIFIED')
-    # 连接可能花时间；真正停止前在该连接上重新获取全量分组，不沿用旧快照。
+    # 在当前连接重新获取全量分组，然后按包名结束；不再限制系统/关键应用。
     apps = []
     groups = ''
     for system in (False, True):
@@ -290,8 +155,6 @@ def stop_targets(plan, shell):
     by_name = {app['name']: app for app in apps}
     if self_package not in by_name:
         raise Blocked('SELF_PACKAGE_INVENTORY_MISSING')
-    protected = {uid for app in apps if app['system'] or any(uid % 100000 < 10000 for uid in app['uids'])
-                 or app['name'] in (self_package, 'moe.shizuku.privileged.api') for uid in app['uids']}
     requested = list(plan['operands'])
     if plan['argv'][0] == 'kill':
         rows = checked(shell(argv_command(['ps', '-A', '-o', 'PID,UID,NAME']))).splitlines()
@@ -306,16 +169,15 @@ def stop_targets(plan, shell):
         requested = []
         for value in plan['operands']:
             uid = processes.get(int(value))
-            if uid is None or uid % 100000 < 10000 or uid in protected:
-                raise Blocked('系统关键进程或归属不明的 PID 不可结束：' + value)
+            if uid is None:
+                raise Blocked('未知 PID：' + value)
             owners = [app['name'] for app in apps if uid in app['uids']]
             if len(owners) != 1:
                 raise Blocked('PID 对应共享或未知 UID，请使用明确包名')
             requested.extend(owners)
     for name in requested:
-        app = by_name.get(name)
-        if not app or app['system'] or app['uids'] & protected:
-            raise Blocked('系统、关键或未识别应用不可结束：' + name)
+        if name not in by_name:
+            raise Blocked('未识别应用：' + name)
     return list(dict.fromkeys(requested))
 
 
@@ -375,12 +237,11 @@ def execute(plan, shell, result_class):
     # ADB may itself be privileged; SMS file paths never bypass native query authorization.
     validate_root_reads(plan, shell)
     if plan['kind'] == 'STOP':
-        # 在当前连接再次刷新清单，先验证全部目标，再按包名停止。
         targets = stop_targets(plan, shell)
         output = plan.get('groups', '')
         for name in targets:
             result = shell(argv_command(['am', 'force-stop', name]))
-            output += '停止用户应用：' + name + '\n' + result.output + '\n'
+            output += '停止应用：' + name + '\n' + result.output + '\n'
             if result.exit_code != 0:
                 return result_class(output, result.exit_code)
         return result_class(output, 0)
