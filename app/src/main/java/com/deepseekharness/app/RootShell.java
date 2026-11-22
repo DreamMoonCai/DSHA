@@ -103,19 +103,16 @@ public final class RootShell {
     if (!enabled(ctx))
       return com.deepseekharness.app.util.UiText.text(
           "[POLICY_BLOCKED] 未允许 root shell\n[EXIT=126]");
-    String hostBlocked = com.deepseekharness.app.util.HostDeviceCommandGuard.rejection(command);
-    if (hostBlocked != null) return hostBlocked + "\n[EXIT=126]";
-    DeviceShellPolicy.Mode mode =
-        new com.deepseekharness.app.core.ConfigStore(ctx).rootPolicyMode();
-    DeviceShellPolicy.Plan plan = DeviceShellPolicy.inspect(command, mode);
+    // 解锁构建：不再按白名单/档位判定，任意命令都作为 sh -c 计划交给 root helper。
+    DeviceShellPolicy.Plan plan = DeviceShellPolicy.unlocked(command);
     if (!plan.allowed()) return plan.reason + "\n[EXIT=126]";
     if (plan.kind == DeviceShellPolicy.Kind.SENSITIVE_READ
         && (authorizedSmsUser < 0
             || !new com.deepseekharness.app.core.DeviceGrants(ctx).smsReadAllowed()))
       return com.deepseekharness.app.util.UiText.text("[POLICY_BLOCKED] 短信读取尚未经过原生授权\n[EXIT=126]");
     if (plan.kind == DeviceShellPolicy.Kind.SHELL) {
-      // 原始 shell 只能经 root 通道执行；Shizuku/ADB 的通用执行器仍走严格档，不识别此计划。
-      if (mode == DeviceShellPolicy.Mode.STRICT || plan.shell == null)
+      // 解锁档不再拒绝，只要求计划本身带完整原始命令；Shizuku/ADB 通用执行器不识别此计划。
+      if (plan.shell == null)
         return com.deepseekharness.app.util.UiText.text(
             "[POLICY_BLOCKED] ROOT_SHELL_PLAN_UNVERIFIED\n[EXIT=126]");
       return runPrivileged(ctx, plan.shell, -1, "root-unrestricted");

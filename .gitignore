@@ -47,6 +47,8 @@ tmp-*/
 tools/offline-rootfs-old-v8.bin
 python-runtime.tgz
 scr_backup.png
+# ci-assets.py 的下载暂存目录（拉固定输入时会落在 app/ 下，不能进版本库）
+app/ci-assets-*/
 
 # 本机工具状态与服务器取证，不进入公开仓库
 .zcode/

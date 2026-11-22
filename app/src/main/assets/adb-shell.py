@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 # DSHA_ADB_SCRIPT_VERSION=20
-"""设备 shell：连接、发送后不重放、真实远端退出码。
+"""设备 shell：原生白名单判定、有限时连接、发送后不重放、真实远端退出码。
 
 用法：adb-shell.py [--host 本机IP] [--port 端口] [--timeout 秒] [--su] 命令
 失败码：124=连接失败/超时，125=已发送但执行结果未知，126=策略拦截。
@@ -298,6 +298,15 @@ def run_on_endpoint(device_cls, signer_cls, cmd, host, port, deadline, command_t
         try:
             def shell(command):
                 marker = '__DSHA_EXIT_' + uuid.uuid4().hex + '__='
+                if isinstance(cmd, dict) and cmd.get('capability') == 'sms.read':
+                    # A connection may outlive the user's native permission. Recheck
+                    # the same canonical query at the last pre-send boundary; a new
+                    # plan must not silently change its user or requested fields.
+                    current = request_device_plan(command, bool(cmd.get('su')))
+                    if (current.get('authorization') != 'remembered'
+                            or any(current.get(key) != cmd.get(key)
+                                   for key in ('version', 'kind', 'argv', 'capability', 'authorization'))):
+                        raise policy.Blocked('敏感查询授权或内容已变化，命令未发送')
                 if isinstance(cmd, dict) and cmd.get('kind') == 'VIRTUAL_SCREEN':
                     if cmd.get('_dsha_sent'):
                         raise policy.Blocked('受管虚拟屏启动只允许发送一次')
@@ -358,7 +367,7 @@ def connect_with_retry(device_cls, signer_cls, cmd, port, host='',
 
 
 def request_device_plan(cmd, use_su=False):
-    """所有设备命令均经过同一原生白名单；白名单已放行全部内容，仅保留桥调用与 JSON 形状校验。"""
+    """所有设备命令均经过同一原生白名单；不接受 DSH_INTERNAL 或关闭确认来绕过。"""
     import urllib.request
     import urllib.parse
     try:
@@ -374,8 +383,7 @@ def request_device_plan(cmd, use_su=False):
         if not isinstance(value, str) or not value.startswith('{'):
             raise policy.Blocked(str(value or '原生策略未就绪'))
         plan = json.loads(value)
-        # 放行所有 Root 操作：不再限制 kind，只要是合法 dict 即交给 policy.execute。
-        if not isinstance(plan, dict):
+        if plan.get('version') != 1 or plan.get('kind') not in ('READ', 'FILE', 'STOP'):
             raise policy.Blocked(plan.get('reason') or '命令未获策略允许')
         plan['su'] = use_su
         return plan
@@ -481,9 +489,10 @@ def request_native_execution(cmd, use_su=False, force_adb=False):
                 raise ValueError('invalid execution result')
             return ShellResult(value['output'], code)
         plan = value.get('plan')
-        # 放行所有 Root 操作：只要求拿到 dict 计划，kind 交回 policy.execute 决定。
-        if value.get('state') != 'adb' or not isinstance(plan, dict):
+        if value.get('state') != 'adb' or not isinstance(plan, dict) or plan.get('version') != 1:
             raise ValueError('missing explicit ADB plan')
+        if plan.get('kind') not in ('READ', 'FILE', 'STOP', 'SHELL'):
+            raise ValueError('invalid ADB plan')
         return plan
     except Exception as error:
         raise ExecutionUnknown('设备桥响应不完整，命令可能已执行，不会切换通道重试（' + type(error).__name__ + '）') from error

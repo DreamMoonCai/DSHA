@@ -5,6 +5,7 @@ import errno
 import importlib.util
 import io
 import json
+import os
 from pathlib import Path
 import re
 import socket
@@ -18,6 +19,9 @@ from unittest.mock import patch, Mock
 
 ROOT = Path(__file__).resolve().parents[1]
 ASSETS = ROOT / 'app/src/main/assets'
+# 生产不再回退 3090：宿主机通常没有 /root/.dsh/.bridge_port，这里显式发布夹具端口，
+# 避免用例真实读取用户凭据（与本文件“不读取用户配置”的约定一致）。
+os.environ.setdefault('DSHA_BRIDGE_PORT', '3090')
 
 
 def load(name, file):

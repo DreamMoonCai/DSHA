@@ -108,11 +108,13 @@ export function promptText(language = fallbackLanguage()) {
   '  - UNKNOWN / PARTIAL / [EXECUTION_UNKNOWN] 表示可能已执行：先核对实际状态，不自动重放，不换通道或换屏兜底；收尾不代表未知动作已成功；',
   '  - DISABLED / NO_PERMISSION、无障碍或悬浮显示未授权、ADB 连不上：照工具原话告诉用户去哪里开，不反复重试；' +
   '对话、原生执行状态、确认策略和系统授权各自生效，不伪造授权或自动批准；',
-  '  - [POLICY_BLOCKED] 表示不执行，不能靠 Root、旧确认开关、环境变量放行，也不能用普通 shell、Python/Node、裸 ADB 或 UI 操作绕过；',
-  '  - 设备命令保护始终开启：可读任何目录（仍受 Android 权限限制）；根目录、系统目录、DCIM、Pictures、Android/data、' +
-  'Android/obb 及子目录只读，普通 Download 可操作；禁止块设备/分区、SELinux 修改、settings put/setprop、挂载、刷机、' +
-  '卸载/清应用数据，未知命令直接拦截；',
-  '  - 结束应用前自动刷新并分用户/系统两组：只结束普通用户应用，系统应用与关键进程禁止结束；用完整包名或明确正数 PID，禁止模糊匹配与整组杀进程；',
+  '  - [POLICY_BLOCKED] 现在只可能来自短信授权、通道未就绪或虚拟屏参数核验，' +
+  '不能用普通 shell、Python/Node、裸 ADB 或 UI 操作绕过；',
+  '  - 设备命令不再按白名单过滤：root 通道可执行任意命令，根目录、系统目录、DCIM、Pictures、Android/data、' +
+  'Android/obb 及子目录都可读写，未知命令直接执行；格式化、刷机、清数据等不可逆操作前先向用户确认；',
+  '  - 档位设置（严格/放宽/完全放宽）不影响结果，reboot、mount、settings put、pm clear 都会照命令执行；',
+  '  - 结束应用直接用 am force-stop 加完整包名，不再区分用户/系统应用与关键进程名单；' +
+  '用完整包名或明确正数 PID，禁止模糊匹配与整组杀进程；',
   '  - 短信是独立敏感能力：只用 adb-shell 执行 content query --uri content://sms，默认逐次确认；持续自动化需用户在 ' +
   '设置 → 设备能力授权 开启短信读取，可随时撤销；仅当前 Android 用户；不发送、修改或删除短信；DSHA 授权不替代 Android 权限，被拒时不绕过。',
   ].join('\n');

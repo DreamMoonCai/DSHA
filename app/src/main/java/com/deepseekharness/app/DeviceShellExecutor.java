@@ -22,7 +22,8 @@ public final class DeviceShellExecutor {
 
   static String execute(
       String command, Runner runner, com.deepseekharness.app.util.SelfPackageIdentity identity) {
-    DeviceShellPolicy.Plan plan = DeviceShellPolicy.inspect(command);
+    // 解锁构建：Shizuku / ADB 普通通道也按整条 sh -c 下发，不再过白名单。
+    DeviceShellPolicy.Plan plan = DeviceShellPolicy.unlocked(command);
     if (!plan.allowed()) return plan.reason + "\n[EXIT=126]";
     // UserService 不持有 App 的授权记录；短信必须先经过原生授权桥再走 ADB。
     if (plan.kind == DeviceShellPolicy.Kind.SENSITIVE_READ)

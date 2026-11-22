@@ -306,6 +306,23 @@ public final class DeviceShellPolicy {
     return rest.indexOf('/', 1) < 0;
   }
 
+  /**
+   * 解锁构建入口：除短信查询外，任意命令都作为 {@code sh -c} 的 READ 计划下发，不再做白名单判定。
+   *
+   * <p>刻意不复用 {@link #inspect(String, Mode)}：那三档仍会拒绝不可逆操作、短信痕迹与未知命令，
+   * 而解锁构建需要 reboot / mount / format 以及对受保护目录的读写。短信读取保留原有原生授权闸门，
+   * 避免把独立敏感能力顺带放开。
+   */
+  public static Plan unlocked(String command) {
+    if (command == null || command.trim().isEmpty())
+      return deny(com.deepseekharness.app.util.UiText.text("命令为空"));
+    if (command.indexOf('\0') >= 0)
+      return deny(com.deepseekharness.app.util.UiText.text("命令包含 NUL 字符"));
+    // 短信查询仍走单条 content query 的识别路径，其余整条交给 sh。
+    if (command.trim().startsWith("content")) return inspect(command);
+    return plan(Kind.READ, Arrays.asList("sh", "-c", command), Collections.emptyList());
+  }
+
   public static Plan inspect(String command) {
     final List<String> args;
     try {
